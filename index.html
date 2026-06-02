@@ -121,7 +121,6 @@
         .btn-descargar {
             background: linear-gradient(90deg, #00ffaa, #00cc66);
         }
-        /* Estilos para el botón de comunidad */
         .comunidad-btn {
             background: linear-gradient(135deg, #ff66cc, #6600cc);
             margin-top: 10px;
@@ -238,18 +237,69 @@ async function seguirRedirecciones(url) {
     } catch(e) { return url; }
 }
 
-async function getServerCountry(ip) {
+// ==================== FUNCIÓN DE RESPALDO PARA OBTENER UBICACIÓN ====================
+async function getServerCountryWithFallback(ip, logCallback) {
+    // PRIMER INTENTO: ip-api.com
     try {
-        const response = await fetch(`http://ip-api.com/json/${ip}`);
+        logCallback(`🌐 Intentando ip-api.com...`, 'info');
+        const response = await fetch(`http://ip-api.com/json/${ip}?fields=status,country,countryCode,regionName,city,isp`);
         if (response.ok) {
             const data = await response.json();
             if (data.status === 'success') {
                 const flag = data.countryCode ? String.fromCodePoint(...[...data.countryCode].map(c => 127397 + c.charCodeAt())) : '';
-                return { country: data.country || "Desconocido", flag: flag, city: data.city || "Desconocido", region: data.regionName || "Desconocido", isp: data.isp || "Desconocido", ip: ip };
+                logCallback(`✅ ip-api.com: ${data.country} ${flag}`, 'exito');
+                return { 
+                    country: data.country || "Desconocido", 
+                    flag: flag, 
+                    city: data.city || "Desconocido", 
+                    region: data.regionName || "Desconocido", 
+                    isp: data.isp || "Desconocido", 
+                    ip: ip,
+                    fuente: 'ip-api.com'
+                };
             }
         }
-    } catch(e) {}
-    return { country: "Desconocido", flag: "", city: "Desconocido", region: "Desconocido", isp: "Desconocido", ip: ip };
+        throw new Error('ip-api.com falló');
+    } catch(e) {
+        logCallback(`⚠️ ip-api.com falló, usando respaldo geoplugin.net...`, 'info');
+        
+        // SEGUNDO INTENTO: geoplugin.net (respaldo)
+        try {
+            const response = await fetch(`http://www.geoplugin.net/json.gp?ip=${ip}`);
+            if (response.ok) {
+                const data = await response.json();
+                if (data && data.geoplugin_status === 200) {
+                    const country = data.geoplugin_countryName || "Desconocido";
+                    const countryCode = data.geoplugin_countryCode || "";
+                    const region = data.geoplugin_regionName || "Desconocido";
+                    const city = data.geoplugin_city || "Desconocido";
+                    const flag = countryCode ? String.fromCodePoint(...[...countryCode].map(c => 127397 + c.charCodeAt())) : '';
+                    logCallback(`✅ geoplugin.net: ${country} ${flag}`, 'exito');
+                    return { 
+                        country: country, 
+                        flag: flag, 
+                        city: city, 
+                        region: region, 
+                        isp: "No disponible", 
+                        ip: ip,
+                        fuente: 'geoplugin.net'
+                    };
+                }
+            }
+            throw new Error('geoplugin.net falló');
+        } catch(e2) {
+            logCallback(`❌ Ambas APIs fallaron, mostrando datos básicos`, 'error');
+            return { 
+                country: "No disponible", 
+                flag: "", 
+                city: "No disponible", 
+                region: "No disponible", 
+                isp: "No disponible", 
+                ip: ip,
+                fuente: 'ninguna'
+            };
+        }
+    }
 }
 
 async function obtenerInfoHost(host, logCallback) {
@@ -263,12 +313,13 @@ async function obtenerInfoHost(host, logCallback) {
             if (data.ips && Object.keys(data.ips).length > 0) {
                 const primeraIP = Object.keys(data.ips)[0];
                 const ipdata = data.ips[primeraIP];
-                const extra = await getServerCountry(host);
+                const extra = await getServerCountryWithFallback(host, logCallback);
                 logCallback(`🔒 IP: ${ipdata.ip || 'N/A'}`, 'exito');
                 logCallback(`🌍 País: ${extra.country} ${extra.flag}`, 'exito');
                 logCallback(`🏙️ Región: ${extra.region}`, 'info');
                 logCallback(`🏡 Ciudad: ${extra.city}`, 'info');
                 logCallback(`🏢 ISP: ${extra.isp}`, 'info');
+                if (extra.fuente) logCallback(`📡 Fuente: ${extra.fuente}`, 'info');
                 return { ip: ipdata.ip || 'N/A', country: extra.country, flag: extra.flag, region: extra.region, city: extra.city, isp: extra.isp };
             }
         }
